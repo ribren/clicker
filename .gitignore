@@ -1,0 +1,6 @@
+.build/
+.venv/
+dist/
+Clicker.app/
+*.zip
+.DS_Store
