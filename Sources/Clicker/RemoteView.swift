@@ -490,15 +490,6 @@ struct RemoteView: View {
 
             nowPlayingCard
         }
-        .overlay(alignment: .top) {
-            if case .failed = model.session.state {
-                Button("Reconnect") { model.connectIfPossible() }
-                    .controlSize(.small)
-                    .help(subtitle)
-                    .padding(6)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
         .disabled(model.session.state == .connecting)
         .overlay {
             if model.session.state == .connecting {
@@ -601,7 +592,24 @@ struct RemoteView: View {
     @ViewBuilder
     private var nowPlayingCard: some View {
         Group {
-            if !model.selectedHasAirPlay {
+            if case .failed(let message) = model.session.state {
+                VStack(spacing: 6) {
+                    Text("Connection failed")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                    Text(message)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 10)
+                    Button("Reconnect Now") { model.connectIfPossible() }
+                        .controlSize(.small)
+                    Text("retries automatically")
+                        .font(.system(size: 8.5))
+                        .foregroundStyle(Palette.inkSecondary.opacity(0.7))
+                }
+            } else if !model.selectedHasAirPlay {
                 VStack(spacing: 6) {
                     Text("See what's playing here")
                         .font(.system(size: 10.5))

@@ -54,6 +54,7 @@ final class RemoteSession: ObservableObject {
     private var focusTimer: Timer?
     private var playingTimer: Timer?
     private var connectWatchdog: Timer?
+    private var retryTimer: Timer?
     private var hasAirPlay = false
     private var lastArtworkTitle = ""
     private var pendingDevice: Device?
@@ -127,14 +128,23 @@ final class RemoteSession: ObservableObject {
         p.standardError = outPipe
         stdinHandle = inPipe.fileHandleForWriting
 
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Callbacks must be ignored once this process is no longer current —
+        // a stale event from a killed attempt otherwise corrupts the state
+        // of the attempt that replaced it (the "stuck on failed" bug).
+        outPipe.fileHandleForReading.readabilityHandler = { [weak self, weak p] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
             let text = String(data: data, encoding: .utf8) ?? ""
-            DispatchQueue.main.async { self?.consume(text) }
+            DispatchQueue.main.async {
+                guard let self, let p, self.process === p else { return }
+                self.consume(text)
+            }
         }
-        p.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.processDied() }
+        p.terminationHandler = { [weak self, weak p] _ in
+            DispatchQueue.main.async {
+                guard let self, let p, self.process === p else { return }
+                self.processDied()
+            }
         }
 
         process = p
@@ -151,8 +161,12 @@ final class RemoteSession: ObservableObject {
         connectWatchdog?.invalidate()
         connectWatchdog = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
-                guard let self, self.state == .connecting else { return }
-                self.process?.terminate()
+                guard let self, self.state == .connecting, let p = self.process else { return }
+                p.terminate()
+                // If SIGTERM is ignored, escalate so the attempt can't linger.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+                }
             }
         }
     }
@@ -164,6 +178,8 @@ final class RemoteSession: ObservableObject {
         playingTimer = nil
         connectWatchdog?.invalidate()
         connectWatchdog = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
         pendingDevice = nil
         pendingCredentials = nil
         pendingAirplay = nil
@@ -197,6 +213,8 @@ final class RemoteSession: ObservableObject {
         if state == .connecting, buffer.contains("pyatv>") {
             connectWatchdog?.invalidate()
             connectWatchdog = nil
+            retryTimer?.invalidate()
+            retryTimer = nil
             state = .connected
             // The prompt is up, so the connection is established; grab the
             // app list and current power state.
@@ -397,10 +415,26 @@ final class RemoteSession: ObservableObject {
                 return
             }
             state = .failed(tail.isEmpty ? "Couldn't connect." : tail)
+            scheduleRetry()
         case .connected:
             state = .failed("Connection lost.")
+            scheduleRetry()
         default:
             break
+        }
+    }
+
+    /// A menu-bar remote should self-heal: while failed, quietly retry
+    /// every 20s so the user never finds it stuck.
+    private func scheduleRetry() {
+        retryTimer?.invalidate()
+        retryTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, case .failed = self.state,
+                      let device = self.pendingDevice else { return }
+                self.triedFullScan = false
+                self.startProcess(scanHost: device.address)
+            }
         }
     }
 }
