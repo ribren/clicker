@@ -25,12 +25,19 @@ heavy lifting underneath (discovery, PIN pairing, Companion + AirPlay).
 
 ## Install
 
+Homebrew:
+
+    brew install --cask ribren/tap/clicker
+
+Or by hand:
+
 1. Grab `Clicker-macOS.zip` from the
    [latest release](https://github.com/ribren/clicker/releases), unzip, and
    drop `Clicker.app` into `/Applications`. (Signed & notarized.)
-2. Install pyatv if you don't have it:
 
-       brew install pipx && pipx install pyatv
+Either way, install pyatv if you don't have it:
+
+    brew install pipx && pipx install pyatv
 
 3. Launch Clicker, allow local-network access when macOS asks, pick your
    Apple TV, click **Pair…**, and type the PIN from the TV screen.
