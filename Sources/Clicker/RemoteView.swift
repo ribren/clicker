@@ -229,7 +229,6 @@ struct RemoteView: View {
     @State private var manualType = false
     @State private var typedText = ""
     @State private var appSearch = ""
-    @State private var showPowerMenu = false
     @State private var powerPressing = false
     @FocusState private var typing: Bool
     @FocusState private var searching: Bool
@@ -537,7 +536,7 @@ struct RemoteView: View {
         }
     }
 
-    /// Awake: click opens the power menu, long-press sleeps directly.
+    /// Awake: click opens Control Center on the TV, long-press sleeps.
     /// Asleep: click wakes.
     private var powerMenu: some View {
         let asleep = model.session.powerState == .asleep
@@ -554,7 +553,7 @@ struct RemoteView: View {
                     send("turn_on")
                     model.session.powerState = .on
                 } else {
-                    showPowerMenu = true
+                    send("home_hold")
                 }
             }
             .onLongPressGesture(minimumDuration: 0.5) {
@@ -568,23 +567,7 @@ struct RemoteView: View {
             } onPressingChanged: { pressing in
                 powerPressing = pressing
             }
-            .popover(isPresented: $showPowerMenu, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Button("Sleep") {
-                        send("turn_off")
-                        model.session.powerState = .asleep
-                        showPowerMenu = false
-                    }
-                    Button("Wake") {
-                        send("turn_on")
-                        model.session.powerState = .on
-                        showPowerMenu = false
-                    }
-                }
-                .buttonStyle(.borderless)
-                .padding(10)
-            }
-            .help(asleep ? "Wake Apple TV" : "Power menu (hold to sleep)")
+            .help(asleep ? "Wake Apple TV" : "Control Center (hold to sleep)")
     }
 
     // MARK: Now playing
