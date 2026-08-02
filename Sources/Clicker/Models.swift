@@ -16,7 +16,21 @@ struct ATVApp: Identifiable, Hashable {
 }
 
 enum PyATV {
-    /// Places the pyatv CLIs might live, best first: explicit override,
+    /// How to launch a pyatv CLI: an executable plus the arguments that
+    /// select the tool (the bundled bridge takes the tool name first).
+    struct Tool {
+        let executable: String
+        let baseArgs: [String]
+    }
+
+    /// The frozen pyatv engine shipped inside the app bundle.
+    private static var bundledBridge: String? {
+        guard let resources = Bundle.main.resourcePath else { return nil }
+        let path = resources + "/atvbridge/atvbridge"
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    /// System fallbacks (source builds without the bridge): explicit override,
     /// a dev checkout venv, our own app-support venv, pipx, Homebrew.
     private static var candidates: [String] {
         let home = NSHomeDirectory()
@@ -34,14 +48,26 @@ enum PyATV {
         return dirs
     }
 
-    static var binDir: String? {
+    private static var binDir: String? {
         candidates.first {
             FileManager.default.isExecutableFile(atPath: $0 + "/atvremote")
         }
     }
-    static var isAvailable: Bool { binDir != nil }
-    static var atvremote: String { (binDir ?? "/usr/local/bin") + "/atvremote" }
-    static var atvscript: String { (binDir ?? "/usr/local/bin") + "/atvscript" }
+
+    static var isAvailable: Bool { bundledBridge != nil || binDir != nil }
+
+    private static func tool(_ name: String) -> Tool? {
+        if let bridge = bundledBridge {
+            return Tool(executable: bridge, baseArgs: [name])
+        }
+        if let dir = binDir {
+            return Tool(executable: dir + "/" + name, baseArgs: [])
+        }
+        return nil
+    }
+
+    static var atvremote: Tool? { tool("atvremote") }
+    static var atvscript: Tool? { tool("atvscript") }
 }
 
 enum DeviceScanner {
@@ -54,10 +80,10 @@ enum DeviceScanner {
     }
 
     private static func runScan() -> [Device] {
-        guard PyATV.isAvailable else { return [] }
+        guard let tool = PyATV.atvscript else { return [] }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: PyATV.atvscript)
-        process.arguments = ["scan"]
+        process.executableURL = URL(fileURLWithPath: tool.executable)
+        process.arguments = tool.baseArgs + ["scan"]
         let out = Pipe()
         process.standardOutput = out
         process.standardError = Pipe()

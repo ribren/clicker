@@ -1,5 +1,7 @@
 .build/
 .venv/
+.pybuild/
+vendor/
 dist/
 Clicker.app/
 *.zip

@@ -4,8 +4,11 @@ A tiny macOS menu-bar remote for Apple TV — clickpad, app launcher, and
 now-playing card, no phone required. For the engineer whose Siri Remote is
 forever in the couch cushions.
 
-Native SwiftUI, no Electron. [pyatv](https://pyatv.dev) does the protocol
-heavy lifting underneath (discovery, PIN pairing, Companion + AirPlay).
+[![Sponsor](https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-ff69b4?style=for-the-badge)](https://github.com/sponsors/ribren)
+
+Native SwiftUI, no Electron, and fully self-contained: the
+[pyatv](https://pyatv.dev) protocol engine (discovery, PIN pairing,
+Companion + AirPlay) ships inside the app.
 
 ## What it does
 
@@ -29,25 +32,15 @@ Homebrew:
 
     brew install --cask ribren/tap/clicker
 
-Or by hand:
+Or by hand: grab `Clicker-macOS.zip` from the
+[latest release](https://github.com/ribren/clicker/releases), unzip, and drop
+`Clicker.app` into `/Applications`. Signed & notarized, batteries included —
+there is nothing else to install.
 
-1. Grab `Clicker-macOS.zip` from the
-   [latest release](https://github.com/ribren/clicker/releases), unzip, and
-   drop `Clicker.app` into `/Applications`. (Signed & notarized.)
-
-Either way, install pyatv if you don't have it:
-
-    brew install pipx && pipx install pyatv
-
-3. Launch Clicker, allow local-network access when macOS asks, pick your
-   Apple TV, click **Pair…**, and type the PIN from the TV screen.
-4. Optional: click **Set Up Now Playing…** on the card at the bottom for the
-   second (AirPlay) pairing that unlocks playback info.
-
-Clicker looks for `atvremote` in pipx (`~/.local/bin`), Homebrew, and
-`/usr/local/bin`. Somewhere else? Point it there:
-
-    defaults write info.backpocket.clicker pyatvBinDir /path/to/bin
+Then: launch Clicker, allow local-network access when macOS asks, pick your
+Apple TV, click **Pair…**, and type the PIN from the TV screen. Optional:
+click **Set Up Now Playing…** on the card at the bottom for the second
+(AirPlay) pairing that unlocks playback info.
 
 ## Build from source
 
@@ -55,6 +48,10 @@ Clicker looks for `atvremote` in pipx (`~/.local/bin`), Homebrew, and
     ./notarize.sh        # notarize + staple (needs notary credentials)
     ./build.sh           # dev loop: build + install to /Applications
 
+`make-app.sh` freezes the pyatv engine on first run via
+`tools/make-bridge.sh` (needs Python 3.13 — pyatv breaks on 3.14). Source
+builds without the frozen engine fall back to a system pyatv (pipx,
+Homebrew, or `defaults write info.backpocket.clicker pyatvBinDir <dir>`).
 Requires macOS 14+ and Swift 5.9+.
 
 ## Notes
@@ -65,6 +62,15 @@ Requires macOS 14+ and Swift 5.9+.
   with a playback-queue request. If a card ever looks stale, hit refresh.
 - Inspired by [Itsytv](https://itsytv.app). Built on the excellent
   [pyatv](https://pyatv.dev).
+
+## Buy me a coffee
+
+Clicker is free, and it always will be. But if it ever spares you one
+full-couch excavation for the physical remote, there's a
+**Buy Me a Coffee ☕** item tucked into the ··· menu, and a
+[sponsor button](https://github.com/sponsors/ribren) up top. Entirely
+optional, deeply appreciated, and roughly the price of pausing the movie
+without getting up.
 
 ## License
 

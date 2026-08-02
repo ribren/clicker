@@ -9,6 +9,7 @@ mkdir -p dist/Clicker.app/Contents/MacOS dist/Clicker.app/Contents/Resources
 cp -X .build/release/Clicker dist/Clicker.app/Contents/MacOS/Clicker
 cp -X Info.plist dist/Clicker.app/Contents/Info.plist
 cp -X AppIcon.icns dist/Clicker.app/Contents/Resources/AppIcon.icns
+[ -x vendor/atvbridge/atvbridge ] && ditto vendor/atvbridge dist/Clicker.app/Contents/Resources/atvbridge
 codesign --force --sign - dist/Clicker.app
 
 echo "Built dist/Clicker.app"

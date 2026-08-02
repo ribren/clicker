@@ -353,6 +353,10 @@ struct RemoteView: View {
                 }
             }
             Divider()
+            Button("Buy Me a Coffee ☕") {
+                NSWorkspace.shared.open(URL(string: "https://github.com/sponsors/ribren")!)
+            }
+            Divider()
             Button("Quit Clicker") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
         } label: {

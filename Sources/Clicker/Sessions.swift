@@ -62,12 +62,16 @@ final class RemoteSession: ObservableObject {
 
     func connect(device: Device, credentials: String, airplayCredentials: String?) {
         disconnect()
+        guard let tool = PyATV.atvremote else {
+            state = .failed("pyatv engine not found.")
+            return
+        }
         state = .connecting
         hasAirPlay = airplayCredentials != nil
 
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: PyATV.atvremote)
-        var args = [
+        p.executableURL = URL(fileURLWithPath: tool.executable)
+        var args = tool.baseArgs + [
             "--id", device.id,
             "--companion-credentials", credentials,
         ]
@@ -352,9 +356,13 @@ final class PairingSession: ObservableObject {
     }
 
     func start() {
+        guard let tool = PyATV.atvremote else {
+            stage = .failure("pyatv engine not found.")
+            return
+        }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: PyATV.atvremote)
-        p.arguments = ["--id", device.id, "--protocol", protocolName, "pair"]
+        p.executableURL = URL(fileURLWithPath: tool.executable)
+        p.arguments = tool.baseArgs + ["--id", device.id, "--protocol", protocolName, "pair"]
         let inPipe = Pipe()
         let outPipe = Pipe()
         p.standardInput = inPipe
