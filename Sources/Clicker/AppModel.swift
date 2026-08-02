@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -14,10 +15,20 @@ final class AppModel: ObservableObject {
     }
 
     let session = RemoteSession()
+    let updates = UpdateChecker()
     private let defaults = UserDefaults.standard
     private var sigtermSource: DispatchSourceSignal?
+    private var cancellables = Set<AnyCancellable>()
 
     init() {
+        // Nested ObservableObjects don't propagate; forward the checker's
+        // changes so views observing the model see update availability.
+        updates.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        updates.start()
+
         // Never orphan the engine process: tear it down on normal quit, and
         // turn SIGTERM (pkill, logout) into a normal quit so the same
         // teardown path runs. A leftover engine holds a live connection to

@@ -348,11 +348,28 @@ struct RemoteView: View {
 
     private var overflowMenu: some View {
         Menu {
+            if let update = model.updates.available {
+                if model.updates.installing {
+                    Button("Updating to v\(update.version)…") {}
+                        .disabled(true)
+                } else {
+                    Button("Update to v\(update.version)") {
+                        model.updates.install()
+                    }
+                }
+                if let error = model.updates.lastError {
+                    Button("Update failed (\(error)) — open releases") {
+                        NSWorkspace.shared.open(update.pageURL)
+                    }
+                }
+                Divider()
+            }
             if model.selectedIsPaired, model.pairing == nil {
                 Button("Re-pair \(model.selectedDevice?.name ?? "Device")…") {
                     model.beginPairing()
                 }
             }
+            Button("Check for Updates") { model.updates.check() }
             Divider()
             Button("Buy Me a Coffee ☕") {
                 NSWorkspace.shared.open(URL(string: "https://github.com/sponsors/ribren")!)
@@ -366,11 +383,20 @@ struct RemoteView: View {
                 .foregroundStyle(Palette.ink)
                 .frame(width: 24, height: 24)
                 .background(Circle().fill(Color.white.opacity(0.45)))
+                .overlay(alignment: .topTrailing) {
+                    if model.updates.available != nil {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                            .offset(x: 1, y: -1)
+                    }
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .frame(width: 24, height: 24)
+        .help(model.updates.available.map { "Update to v\($0.version) available" } ?? "More")
     }
 
     private var subtitle: String {
