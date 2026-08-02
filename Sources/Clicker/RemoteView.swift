@@ -229,6 +229,8 @@ struct RemoteView: View {
     @State private var manualType = false
     @State private var typedText = ""
     @State private var appSearch = ""
+    @State private var showPowerMenu = false
+    @State private var powerPressing = false
     @FocusState private var typing: Bool
     @FocusState private var searching: Bool
 
@@ -535,22 +537,54 @@ struct RemoteView: View {
         }
     }
 
+    /// Awake: click opens the power menu, long-press sleeps directly.
+    /// Asleep: click wakes.
     private var powerMenu: some View {
-        Menu {
-            Button("Wake") { send("turn_on") }
-            Button("Sleep") { send("turn_off") }
-        } label: {
-            Image(systemName: "power")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Palette.ink)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(Color.white.opacity(0.45)))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .frame(width: 24, height: 24)
-        .help("Power")
+        let asleep = model.session.powerState == .asleep
+        return Image(systemName: "power")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(asleep ? Palette.inkSecondary.opacity(0.7) : Palette.ink)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Color.white.opacity(powerPressing ? 0.85 : 0.45)))
+            .scaleEffect(powerPressing ? 0.90 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.6), value: powerPressing)
+            .contentShape(Circle())
+            .onTapGesture {
+                if asleep {
+                    send("turn_on")
+                    model.session.powerState = .on
+                } else {
+                    showPowerMenu = true
+                }
+            }
+            .onLongPressGesture(minimumDuration: 0.5) {
+                if asleep {
+                    send("turn_on")
+                    model.session.powerState = .on
+                } else {
+                    send("turn_off")
+                    model.session.powerState = .asleep
+                }
+            } onPressingChanged: { pressing in
+                powerPressing = pressing
+            }
+            .popover(isPresented: $showPowerMenu, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Button("Sleep") {
+                        send("turn_off")
+                        model.session.powerState = .asleep
+                        showPowerMenu = false
+                    }
+                    Button("Wake") {
+                        send("turn_on")
+                        model.session.powerState = .on
+                        showPowerMenu = false
+                    }
+                }
+                .buttonStyle(.borderless)
+                .padding(10)
+            }
+            .help(asleep ? "Wake Apple TV" : "Power menu (hold to sleep)")
     }
 
     // MARK: Now playing

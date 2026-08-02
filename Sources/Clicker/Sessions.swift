@@ -30,10 +30,18 @@ final class RemoteSession: ObservableObject {
         case failed(String)
     }
 
+    enum PowerState: Equatable {
+        case unknown
+        case on
+        case asleep
+    }
+
     @Published var state: State = .idle
     @Published var apps: [ATVApp] = []
     /// True while a text field is focused on the Apple TV (polled).
     @Published var keyboardActive = false
+    /// Awake/asleep, polled alongside keyboard focus.
+    @Published var powerState: PowerState = .unknown
     @Published var nowPlaying = NowPlaying()
     /// App currently playing media (fallback when apps like Netflix omit titles).
     @Published var nowPlayingApp: ATVApp?
@@ -167,6 +175,7 @@ final class RemoteSession: ObservableObject {
         lineRemainder = ""
         apps = []
         keyboardActive = false
+        powerState = .unknown
         nowPlaying = NowPlaying()
         nowPlayingApp = nil
         artwork = nil
@@ -189,8 +198,9 @@ final class RemoteSession: ObservableObject {
             connectWatchdog?.invalidate()
             connectWatchdog = nil
             state = .connected
-            // The prompt is up, so the connection is established; grab the app list.
-            stdinHandle?.write(Data("app_list\n".utf8))
+            // The prompt is up, so the connection is established; grab the
+            // app list and current power state.
+            stdinHandle?.write(Data("app_list\npower_state\n".utf8))
             startFocusPolling()
             if hasAirPlay {
                 // tvOS 26 doesn't push the current playback snapshot to new
@@ -216,7 +226,7 @@ final class RemoteSession: ObservableObject {
         focusTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.state == .connected else { return }
-                self.stdinHandle?.write(Data("text_focus_state\n".utf8))
+                self.stdinHandle?.write(Data("text_focus_state\npower_state\n".utf8))
             }
         }
     }
@@ -241,6 +251,14 @@ final class RemoteSession: ObservableObject {
     private func parse(line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
+        if trimmed.contains("PowerState.On") {
+            if powerState != .on { powerState = .on }
+            return
+        }
+        if trimmed.contains("PowerState.Asleep") {
+            if powerState != .asleep { powerState = .asleep }
+            return
+        }
         if trimmed.contains("FocusState.Unfocused") {
             if keyboardActive { keyboardActive = false }
             return
@@ -364,6 +382,7 @@ final class RemoteSession: ObservableObject {
         process = nil
         stdinHandle = nil
         keyboardActive = false
+        powerState = .unknown
         nowPlaying = NowPlaying()
         nowPlayingApp = nil
         artwork = nil
