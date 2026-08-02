@@ -15,8 +15,25 @@ final class AppModel: ObservableObject {
 
     let session = RemoteSession()
     private let defaults = UserDefaults.standard
+    private var sigtermSource: DispatchSourceSignal?
 
     init() {
+        // Never orphan the engine process: tear it down on normal quit, and
+        // turn SIGTERM (pkill, logout) into a normal quit so the same
+        // teardown path runs. A leftover engine holds a live connection to
+        // the Apple TV and makes the next launch hang while connecting.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.session.disconnect()
+            self?.pairing?.cancel()
+        }
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { NSApplication.shared.terminate(nil) }
+        source.resume()
+        sigtermSource = source
+
         if let data = defaults.data(forKey: "devices"),
            let cached = try? JSONDecoder().decode([Device].self, from: data) {
             devices = cached.filter(\.isAppleTV)

@@ -45,8 +45,13 @@ final class RemoteSession: ObservableObject {
     private var lineRemainder = ""
     private var focusTimer: Timer?
     private var playingTimer: Timer?
+    private var connectWatchdog: Timer?
     private var hasAirPlay = false
     private var lastArtworkTitle = ""
+    private var pendingDevice: Device?
+    private var pendingCredentials: String?
+    private var pendingAirplay: String?
+    private var triedFullScan = false
 
     /// Working directory for the subprocess; `artwork_save` drops artwork.png here.
     private let workDir: URL = {
@@ -62,21 +67,46 @@ final class RemoteSession: ObservableObject {
 
     func connect(device: Device, credentials: String, airplayCredentials: String?) {
         disconnect()
+        sweepOrphanBridges()
+        pendingDevice = device
+        pendingCredentials = credentials
+        pendingAirplay = airplayCredentials
+        triedFullScan = false
+        hasAirPlay = airplayCredentials != nil
+        // First try the address we already know — no discovery wait.
+        startProcess(scanHost: device.address)
+    }
+
+    /// Kill engine processes orphaned by an earlier Clicker that quit without
+    /// cleanup. A leftover holds a live Companion session with our identity,
+    /// which makes the Apple TV stall new connections — the "hang on connect".
+    private func sweepOrphanBridges() {
+        let sweep = Process()
+        sweep.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        sweep.arguments = ["-f", "atvbridge/atvbridge atvremote"]
+        try? sweep.run()
+        sweep.waitUntilExit()
+    }
+
+    private func startProcess(scanHost: String?) {
+        guard let device = pendingDevice, let credentials = pendingCredentials else { return }
         guard let tool = PyATV.atvremote else {
             state = .failed("pyatv engine not found.")
             return
         }
         state = .connecting
-        hasAirPlay = airplayCredentials != nil
+        buffer = ""
+        lineRemainder = ""
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool.executable)
-        var args = tool.baseArgs + [
-            "--id", device.id,
-            "--companion-credentials", credentials,
-        ]
-        if let airplayCredentials {
-            args += ["--airplay-credentials", airplayCredentials]
+        var args = tool.baseArgs
+        if let scanHost {
+            args += ["--scan-hosts", scanHost]
+        }
+        args += ["--id", device.id, "--companion-credentials", credentials]
+        if let airplay = pendingAirplay {
+            args += ["--airplay-credentials", airplay]
         }
         args.append("cli")
         p.arguments = args
@@ -105,6 +135,17 @@ final class RemoteSession: ObservableObject {
         } catch {
             state = .failed("Couldn't launch atvremote: \(error.localizedDescription)")
             process = nil
+            return
+        }
+
+        // Never let "Connecting…" hang: give up after 12s and let processDied
+        // decide whether to retry with a full scan or surface the failure.
+        connectWatchdog?.invalidate()
+        connectWatchdog = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.state == .connecting else { return }
+                self.process?.terminate()
+            }
         }
     }
 
@@ -113,6 +154,11 @@ final class RemoteSession: ObservableObject {
         focusTimer = nil
         playingTimer?.invalidate()
         playingTimer = nil
+        connectWatchdog?.invalidate()
+        connectWatchdog = nil
+        pendingDevice = nil
+        pendingCredentials = nil
+        pendingAirplay = nil
         process?.terminationHandler = nil
         if let p = process, p.isRunning { p.terminate() }
         process = nil
@@ -140,6 +186,8 @@ final class RemoteSession: ObservableObject {
     private func consume(_ text: String) {
         buffer += text
         if state == .connecting, buffer.contains("pyatv>") {
+            connectWatchdog?.invalidate()
+            connectWatchdog = nil
             state = .connected
             // The prompt is up, so the connection is established; grab the app list.
             stdinHandle?.write(Data("app_list\n".utf8))
@@ -311,6 +359,8 @@ final class RemoteSession: ObservableObject {
         focusTimer = nil
         playingTimer?.invalidate()
         playingTimer = nil
+        connectWatchdog?.invalidate()
+        connectWatchdog = nil
         process = nil
         stdinHandle = nil
         keyboardActive = false
@@ -320,6 +370,13 @@ final class RemoteSession: ObservableObject {
         let tail = buffer.split(separator: "\n").suffix(2).joined(separator: " ")
         switch state {
         case .connecting:
+            // The stored address may be stale (DHCP moved the box); retry
+            // once with a full network discovery before giving up.
+            if !triedFullScan, pendingDevice != nil {
+                triedFullScan = true
+                startProcess(scanHost: nil)
+                return
+            }
             state = .failed(tail.isEmpty ? "Couldn't connect." : tail)
         case .connected:
             state = .failed("Connection lost.")
