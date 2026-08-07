@@ -49,6 +49,8 @@ final class RemoteSession: ObservableObject {
 
     private var process: Process?
     private var stdinHandle: FileHandle?
+    private var stdoutHandle: FileHandle?
+    private var uiVisible = true
     private var buffer = ""
     private var lineRemainder = ""
     private var focusTimer: Timer?
@@ -131,9 +133,15 @@ final class RemoteSession: ObservableObject {
         // Callbacks must be ignored once this process is no longer current —
         // a stale event from a killed attempt otherwise corrupts the state
         // of the attempt that replaced it (the "stuck on failed" bug).
+        // And at EOF the handler MUST unregister itself: macOS re-invokes it
+        // continuously on a closed pipe, which pegs a core per dead process.
+        stdoutHandle = outPipe.fileHandleForReading
         outPipe.fileHandleForReading.readabilityHandler = { [weak self, weak p] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
             let text = String(data: data, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
                 guard let self, let p, self.process === p else { return }
@@ -187,6 +195,8 @@ final class RemoteSession: ObservableObject {
         if let p = process, p.isRunning { p.terminate() }
         process = nil
         stdinHandle = nil
+        stdoutHandle?.readabilityHandler = nil
+        stdoutHandle = nil
         buffer = ""
         lineRemainder = ""
         apps = []
@@ -208,6 +218,29 @@ final class RemoteSession: ObservableObject {
         send("app_list")
     }
 
+    /// The 1.5s/3s polls only feed UI, so they pause while the popover is
+    /// closed (the connection itself stays up). Reopening polls immediately.
+    func setUIVisible(_ visible: Bool) {
+        guard visible != uiVisible else { return }
+        uiVisible = visible
+        guard state == .connected else { return }
+        if visible {
+            var commands = "text_focus_state\npower_state\n"
+            if hasAirPlay {
+                if !nowPlaying.isActiveState { commands += "artwork_save\n" }
+                commands += "playing\napp\n"
+            }
+            stdinHandle?.write(Data(commands.utf8))
+            startFocusPolling()
+            if hasAirPlay { startPlayingPolling() }
+        } else {
+            focusTimer?.invalidate()
+            focusTimer = nil
+            playingTimer?.invalidate()
+            playingTimer = nil
+        }
+    }
+
     private func consume(_ text: String) {
         buffer += text
         if state == .connecting, buffer.contains("pyatv>") {
@@ -219,13 +252,15 @@ final class RemoteSession: ObservableObject {
             // The prompt is up, so the connection is established; grab the
             // app list and current power state.
             stdinHandle?.write(Data("app_list\npower_state\n".utf8))
-            startFocusPolling()
             if hasAirPlay {
                 // tvOS 26 doesn't push the current playback snapshot to new
                 // clients; an artwork request forces it out (playback-queue
                 // request under the hood). Prime with one before querying.
                 stdinHandle?.write(Data("artwork_save\nplaying\napp\n".utf8))
-                startPlayingPolling()
+            }
+            if uiVisible {
+                startFocusPolling()
+                if hasAirPlay { startPlayingPolling() }
             }
         }
 
@@ -399,6 +434,8 @@ final class RemoteSession: ObservableObject {
         connectWatchdog = nil
         process = nil
         stdinHandle = nil
+        stdoutHandle?.readabilityHandler = nil
+        stdoutHandle = nil
         keyboardActive = false
         powerState = .unknown
         nowPlaying = NowPlaying()
@@ -458,6 +495,7 @@ final class PairingSession: ObservableObject {
 
     private var process: Process?
     private var stdinHandle: FileHandle?
+    private var stdoutHandle: FileHandle?
     private var buffer = ""
 
     init(device: Device, protocolName: String = "companion") {
@@ -479,10 +517,15 @@ final class PairingSession: ObservableObject {
         p.standardOutput = outPipe
         p.standardError = outPipe
         stdinHandle = inPipe.fileHandleForWriting
+        stdoutHandle = outPipe.fileHandleForReading
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else {
+                // EOF: unregister or macOS re-invokes this forever (CPU spin).
+                handle.readabilityHandler = nil
+                return
+            }
             let text = String(data: data, encoding: .utf8) ?? ""
             DispatchQueue.main.async { self?.consume(text) }
         }
@@ -507,6 +550,8 @@ final class PairingSession: ObservableObject {
         process?.terminationHandler = nil
         if let p = process, p.isRunning { p.terminate() }
         process = nil
+        stdoutHandle?.readabilityHandler = nil
+        stdoutHandle = nil
     }
 
     private func consume(_ text: String) {
@@ -519,6 +564,8 @@ final class PairingSession: ObservableObject {
     private func finished() {
         process = nil
         stdinHandle = nil
+        stdoutHandle?.readabilityHandler = nil
+        stdoutHandle = nil
         // Let the readability handler drain any final output before judging.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.evaluateOutcome()

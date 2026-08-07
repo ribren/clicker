@@ -283,8 +283,12 @@ struct RemoteView: View {
                     && !UserDefaults.standard.bool(forKey: "showApps")
             }
             scrollRouter.install()
+            model.session.setUIVisible(true)
         }
-        .onDisappear { scrollRouter.remove() }
+        .onDisappear {
+            scrollRouter.remove()
+            model.session.setUIVisible(false)
+        }
     }
 
     // MARK: Header rows
