@@ -16,11 +16,35 @@ final class AppModel: ObservableObject {
 
     let session = RemoteSession()
     let updates = UpdateChecker()
+    /// True when built for a `--snapshot` render: canned data, no networking.
+    let snapshotMode: Bool
     private let defaults = UserDefaults.standard
     private var sigtermSource: DispatchSourceSignal?
     private var cancellables = Set<AnyCancellable>()
 
-    init() {
+    init(snapshot: Bool = false) {
+        snapshotMode = snapshot
+        if snapshot {
+            devices = [
+                Device(id: "snap-1", name: "Living Room", address: "10.0.0.2", model: "Apple TV 4K (gen 2)"),
+                Device(id: "snap-2", name: "Bedroom", address: "10.0.0.3", model: "Apple TV 4K (gen 3)"),
+            ]
+            selectedID = "snap-1"
+            session.state = .connected
+            session.powerState = .on
+            session.apps = [
+                ATVApp(name: "Netflix", bundleID: "com.netflix.Netflix"),
+                ATVApp(name: "YouTube", bundleID: "com.google.ios.youtube"),
+                ATVApp(name: "TV", bundleID: "com.apple.TVWatchList"),
+                ATVApp(name: "Music", bundleID: "com.apple.TVMusic"),
+            ]
+            session.nowPlayingApp = ATVApp(name: "TV", bundleID: "com.apple.TVWatchList")
+            session.nowPlaying = NowPlaying(
+                state: "Playing", title: "Foundation", subtitle: "Apple TV+",
+                position: 1154, total: 3480
+            )
+            return
+        }
         // Nested ObservableObjects don't propagate; forward the checker's
         // changes so views observing the model see update availability.
         updates.objectWillChange
@@ -63,11 +87,13 @@ final class AppModel: ObservableObject {
     }
 
     var selectedIsPaired: Bool {
+        if snapshotMode { return true }
         guard let id = selectedID else { return false }
         return credentials(for: id) != nil
     }
 
     var selectedHasAirPlay: Bool {
+        if snapshotMode { return true }
         guard let id = selectedID else { return false }
         return airplayCredentials(for: id) != nil
     }

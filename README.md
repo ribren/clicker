@@ -6,6 +6,10 @@ forever in the couch cushions.
 
 [![Sponsor](https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-ff69b4?style=for-the-badge)](https://github.com/sponsors/ribren)
 
+<p align="center">
+  <img src="docs/screenshot.png" width="260" alt="Clicker's popover: Siri Remote-style clickpad and buttons, with a now-playing card at the bottom">
+</p>
+
 Native SwiftUI, no Electron, and fully self-contained: the
 [pyatv](https://pyatv.dev) protocol engine (discovery, PIN pairing,
 Companion + AirPlay) ships inside the app.
