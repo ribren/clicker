@@ -31,11 +31,7 @@ final class TypePanelController: NSObject, NSWindowDelegate {
     private func build(session: RemoteSession) {
         let content = TypePanelView(
             session: session,
-            onSubmit: { [weak self] text in
-                self?.session?.send("text_set=\(text)")
-                self?.hide()
-            },
-            onCancel: { [weak self] in self?.hide() }
+            onDone: { [weak self] in self?.hide() }
         )
 
         let effect = NSVisualEffectView()
@@ -93,10 +89,11 @@ final class TypePanelController: NSObject, NSWindowDelegate {
 
 private struct TypePanelView: View {
     @ObservedObject var session: RemoteSession
-    let onSubmit: (String) -> Void
-    let onCancel: () -> Void
+    let onDone: () -> Void
 
     @State private var text = ""
+    @State private var pendingSend: DispatchWorkItem?
+    @State private var suppressNextChange = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -110,11 +107,16 @@ private struct TypePanelView: View {
                     .font(.system(size: 24))
                     .focused($focused)
                     .onSubmit {
-                        let sent = text
-                        text = ""
-                        guard !sent.isEmpty else { return }
-                        onSubmit(sent)
+                        flush()
+                        onDone()
                     }
+                Button(action: clearBoth) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear here and on the Apple TV")
             }
             Text(statusLine)
                 .font(.system(size: 11.5))
@@ -124,11 +126,54 @@ private struct TypePanelView: View {
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
         .frame(width: 560, alignment: .leading)
+        .onChange(of: text) { _, newValue in
+            if suppressNextChange {
+                suppressNextChange = false
+                return
+            }
+            // Live typing: coalesce bursts so fast typing sends ~8/s, not 1:1.
+            pendingSend?.cancel()
+            let work = DispatchWorkItem {
+                if newValue.isEmpty {
+                    session.send("text_clear")
+                } else {
+                    session.send("text_set=\(newValue)")
+                }
+            }
+            pendingSend = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
         .onAppear {
-            text = ""
+            if !text.isEmpty {
+                // Leftover from last time: reset quietly, don't clear the TV.
+                suppressNextChange = true
+                text = ""
+            }
             focused = true
         }
-        .onExitCommand { onCancel() }
+        .onExitCommand {
+            flush()
+            onDone()
+        }
+    }
+
+    /// Push whatever is pending right now (return/esc shouldn't lose the tail).
+    private func flush() {
+        pendingSend?.cancel()
+        pendingSend = nil
+        if !text.isEmpty {
+            session.send("text_set=\(text)")
+        }
+    }
+
+    /// The (x): wipe the local field AND the TV's field, resetting the sync.
+    private func clearBoth() {
+        pendingSend?.cancel()
+        pendingSend = nil
+        suppressNextChange = true
+        text = ""
+        session.send("text_clear")
+        focused = true
     }
 
     private var statusLine: String {
@@ -138,6 +183,6 @@ private struct TypePanelView: View {
         if !session.keyboardActive {
             return "No text field is focused on the TV — open a search there first"
         }
-        return "⏎ sends to the Apple TV · esc closes"
+        return "Typing live on the Apple TV · ⏎ or esc closes"
     }
 }
