@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
 
     let session = RemoteSession()
     let updates = UpdateChecker()
+    let typePanel = TypePanelController()
     /// True when built for a `--snapshot` render: canned data, no networking.
     let snapshotMode: Bool
     private let defaults = UserDefaults.standard
@@ -175,5 +176,9 @@ final class AppModel: ObservableObject {
         pairing?.cancel()
         pairing = nil
         connectIfPossible()
+    }
+
+    func openTypePanel() {
+        typePanel.show(session: session)
     }
 }

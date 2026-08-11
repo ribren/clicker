@@ -50,7 +50,9 @@ final class RemoteSession: ObservableObject {
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var stdoutHandle: FileHandle?
-    private var uiVisible = true
+    private var popoverVisible = true
+    private var panelVisible = false
+    private var pollsRunning = false
     private var buffer = ""
     private var lineRemainder = ""
     private var focusTimer: Timer?
@@ -200,6 +202,7 @@ final class RemoteSession: ObservableObject {
         buffer = ""
         lineRemainder = ""
         apps = []
+        pollsRunning = false
         keyboardActive = false
         powerState = .unknown
         nowPlaying = NowPlaying()
@@ -218,13 +221,23 @@ final class RemoteSession: ObservableObject {
         send("app_list")
     }
 
-    /// The 1.5s/3s polls only feed UI, so they pause while the popover is
-    /// closed (the connection itself stays up). Reopening polls immediately.
+    /// The 1.5s/3s polls only feed UI, so they pause while neither the
+    /// popover nor the type panel is showing (the connection stays up).
     func setUIVisible(_ visible: Bool) {
-        guard visible != uiVisible else { return }
-        uiVisible = visible
-        guard state == .connected else { return }
-        if visible {
+        popoverVisible = visible
+        updatePolling()
+    }
+
+    func setPanelVisible(_ visible: Bool) {
+        panelVisible = visible
+        updatePolling()
+    }
+
+    private func updatePolling() {
+        let want = (popoverVisible || panelVisible) && state == .connected
+        guard want != pollsRunning else { return }
+        pollsRunning = want
+        if want {
             var commands = "text_focus_state\npower_state\n"
             if hasAirPlay {
                 if !nowPlaying.isActiveState { commands += "artwork_save\n" }
@@ -258,10 +271,8 @@ final class RemoteSession: ObservableObject {
                 // request under the hood). Prime with one before querying.
                 stdinHandle?.write(Data("artwork_save\nplaying\napp\n".utf8))
             }
-            if uiVisible {
-                startFocusPolling()
-                if hasAirPlay { startPlayingPolling() }
-            }
+            pollsRunning = false
+            updatePolling()
         }
 
         lineRemainder += text
@@ -436,6 +447,7 @@ final class RemoteSession: ObservableObject {
         stdinHandle = nil
         stdoutHandle?.readabilityHandler = nil
         stdoutHandle = nil
+        pollsRunning = false
         keyboardActive = false
         powerState = .unknown
         nowPlaying = NowPlaying()

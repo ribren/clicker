@@ -226,11 +226,8 @@ struct RemoteView: View {
     @AppStorage("showApps") private var showApps = false
     @StateObject private var scrollRouter = ScrollRouter()
     @ObservedObject private var icons = IconStore.shared
-    @State private var manualType = false
-    @State private var typedText = ""
     @State private var appSearch = ""
     @State private var powerPressing = false
-    @FocusState private var typing: Bool
     @FocusState private var searching: Bool
 
     var body: some View {
@@ -245,11 +242,6 @@ struct RemoteView: View {
             } else if !model.selectedIsPaired {
                 pairPrompt
             } else {
-                if model.session.keyboardActive || manualType {
-                    typeField
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
                 // Fixed-size stage: the apps drawer swaps in for the remote
                 // controls so the panel never has to change height.
                 ZStack {
@@ -263,10 +255,6 @@ struct RemoteView: View {
                 }
                 .frame(width: Layout.contentWidth, height: Layout.bodyHeight)
                 .animation(.spring(response: 0.32, dampingFraction: 0.85), value: showApps)
-                .animation(
-                    .spring(response: 0.35, dampingFraction: 0.8),
-                    value: model.session.keyboardActive || manualType
-                )
             }
         }
         .padding(.horizontal, Layout.gap)
@@ -546,8 +534,8 @@ struct RemoteView: View {
                 DarkButton(symbol: "playpause.fill", help: "Play / Pause  ␣",
                            fontSize: 16, shortcut: shortcut(" ")) { send("play_pause") }
                 DarkButton(symbol: "keyboard", help: "Type on TV",
-                           fontSize: 16, active: manualType || model.session.keyboardActive) {
-                    manualType.toggle()
+                           fontSize: 16, active: model.session.keyboardActive) {
+                    model.openTypePanel()
                 }
             }
             VStack(spacing: Layout.gap) {
@@ -741,40 +729,6 @@ struct RemoteView: View {
             : String(format: "%d:%02d", m, s)
     }
 
-    /// Shown when a text field is focused on the TV (or toggled manually).
-    private var typeField: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "keyboard")
-                .font(.system(size: 11))
-                .foregroundStyle(model.session.keyboardActive ? Color.accentColor : Palette.inkSecondary)
-            TextField("Type on TV…", text: $typedText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.ink)
-                .focused($typing)
-                .onSubmit {
-                    guard !typedText.isEmpty else { return }
-                    send("text_set=\(typedText)")
-                    typedText = ""
-                }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 9)
-                .fill(Color.white.opacity(0.7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9)
-                        .strokeBorder(
-                            model.session.keyboardActive
-                                ? Color.accentColor.opacity(0.5)
-                                : Color.black.opacity(0.08),
-                            lineWidth: 1
-                        )
-                )
-        )
-        .onAppear { typing = true }
-    }
 
     // MARK: Apps drawer
 
@@ -879,7 +833,7 @@ struct RemoteView: View {
     /// Keyboard shortcuts route to remote buttons only while no text field
     /// (TV typing or app search) is focused, so typing stays normal.
     private func shortcut(_ key: KeyEquivalent) -> KeyboardShortcut? {
-        (typing || searching) ? nil : KeyboardShortcut(key, modifiers: [])
+        searching ? nil : KeyboardShortcut(key, modifiers: [])
     }
 }
 
