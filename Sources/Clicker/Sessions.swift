@@ -59,6 +59,15 @@ final class RemoteSession: ObservableObject {
     private var playingTimer: Timer?
     private var connectWatchdog: Timer?
     private var retryTimer: Timer?
+    private var healthTimer: Timer?
+    private var lastOutputAt = Date()
+    private var consecutiveFailures = 0
+    /// Fired on repeated final failures — the owner should rescan to refresh
+    /// stale addresses, then reconnect.
+    var onPersistentFailure: (() -> Void)?
+    /// Fired when a connect only succeeded via full-scan fallback, meaning
+    /// the cached address is stale and worth refreshing in the background.
+    var onStaleAddress: (() -> Void)?
     private var hasAirPlay = false
     private var lastArtworkTitle = ""
     private var pendingDevice: Device?
@@ -163,13 +172,15 @@ final class RemoteSession: ObservableObject {
         } catch {
             state = .failed("Couldn't launch atvremote: \(error.localizedDescription)")
             process = nil
+            scheduleRetry()
             return
         }
 
-        // Never let "Connecting…" hang: give up after 12s and let processDied
-        // decide whether to retry with a full scan or surface the failure.
+        // Never let "Connecting…" hang. A direct-address attempt against a
+        // dead IP should fail over fast (6s); a full network scan gets 12s.
+        let timeout: TimeInterval = scanHost != nil ? 6 : 12
         connectWatchdog?.invalidate()
-        connectWatchdog = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+        connectWatchdog = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.state == .connecting, let p = self.process else { return }
                 p.terminate()
@@ -190,6 +201,9 @@ final class RemoteSession: ObservableObject {
         connectWatchdog = nil
         retryTimer?.invalidate()
         retryTimer = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
+        consecutiveFailures = 0
         pendingDevice = nil
         pendingCredentials = nil
         pendingAirplay = nil
@@ -244,17 +258,43 @@ final class RemoteSession: ObservableObject {
                 commands += "playing\napp\n"
             }
             stdinHandle?.write(Data(commands.utf8))
+            lastOutputAt = Date()
             startFocusPolling()
             if hasAirPlay { startPlayingPolling() }
+            startHealthMonitor()
         } else {
             focusTimer?.invalidate()
             focusTimer = nil
             playingTimer?.invalidate()
             playingTimer = nil
+            healthTimer?.invalidate()
+            healthTimer = nil
+        }
+    }
+
+    /// While polls run, the engine answers every 1.5s — prolonged silence
+    /// means the connection died underneath us (sleep, network change).
+    /// Kill the zombie; the normal retry machinery reconnects.
+    private func startHealthMonitor() {
+        healthTimer?.invalidate()
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.state == .connected, self.pollsRunning,
+                      Date().timeIntervalSince(self.lastOutputAt) > 8 else { return }
+                if let p = self.process {
+                    p.terminate()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+                    }
+                } else {
+                    self.processDied()
+                }
+            }
         }
     }
 
     private func consume(_ text: String) {
+        lastOutputAt = Date()
         buffer += text
         if state == .connecting, buffer.contains("pyatv>") {
             connectWatchdog?.invalidate()
@@ -273,6 +313,11 @@ final class RemoteSession: ObservableObject {
             }
             pollsRunning = false
             updatePolling()
+            consecutiveFailures = 0
+            if triedFullScan {
+                // Only the fallback found it: the cached address is stale.
+                onStaleAddress?()
+            }
         }
 
         lineRemainder += text
@@ -443,6 +488,8 @@ final class RemoteSession: ObservableObject {
         playingTimer = nil
         connectWatchdog?.invalidate()
         connectWatchdog = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
         process = nil
         stdinHandle = nil
         stdoutHandle?.readabilityHandler = nil
@@ -464,13 +511,23 @@ final class RemoteSession: ObservableObject {
                 return
             }
             state = .failed(tail.isEmpty ? "Couldn't connect." : tail)
-            scheduleRetry()
+            registerFailure()
         case .connected:
             state = .failed("Connection lost.")
-            scheduleRetry()
+            registerFailure()
         default:
             break
         }
+    }
+
+    private func registerFailure() {
+        consecutiveFailures += 1
+        // Every second failure in a row, ask the owner to rescan — the most
+        // common cause of persistent failure is a DHCP-moved Apple TV.
+        if consecutiveFailures.isMultiple(of: 2) {
+            onPersistentFailure?()
+        }
+        scheduleRetry()
     }
 
     /// A menu-bar remote should self-heal: while failed, quietly retry

@@ -70,6 +70,20 @@ final class AppModel: ObservableObject {
         source.resume()
         sigtermSource = source
 
+        // Self-healing: refresh device addresses when connects keep failing
+        // or only succeed via full-scan fallback (DHCP moved the Apple TV),
+        // and reconnect after the Mac wakes from sleep.
+        session.onPersistentFailure = { [weak self] in self?.scanNow() }
+        session.onStaleAddress = { [weak self] in self?.scanNow() }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                guard let self, self.pairing == nil, self.selectedIsPaired else { return }
+                self.connectIfPossible()
+            }
+        }
+
         if let data = defaults.data(forKey: "devices"),
            let cached = try? JSONDecoder().decode([Device].self, from: data) {
             devices = cached.filter(\.isAppleTV)
@@ -134,7 +148,11 @@ final class AppModel: ObservableObject {
                 }
             }
             scanning = false
-            if case .idle = session.state { connectIfPossible() }
+            // Fresh addresses in hand: (re)connect unless already on our way.
+            switch session.state {
+            case .idle, .failed: connectIfPossible()
+            default: break
+            }
         }
     }
 
