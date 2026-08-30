@@ -70,6 +70,8 @@ final class RemoteSession: ObservableObject {
     var onStaleAddress: (() -> Void)?
     private var hasAirPlay = false
     private var lastArtworkTitle = ""
+    private var pendingBlock: PlayingBlock?
+    private var playingTick = 0
     private var pendingDevice: Device?
     private var pendingCredentials: String?
     private var pendingAirplay: String?
@@ -215,6 +217,7 @@ final class RemoteSession: ObservableObject {
         stdoutHandle = nil
         buffer = ""
         lineRemainder = ""
+        pendingBlock = nil
         apps = []
         pollsRunning = false
         keyboardActive = false
@@ -254,8 +257,9 @@ final class RemoteSession: ObservableObject {
         if want {
             var commands = "text_focus_state\npower_state\n"
             if hasAirPlay {
-                if !nowPlaying.isActiveState { commands += "artwork_save\n" }
-                commands += "playing\napp\n"
+                // Opening the UI always forces a fresh snapshot, so the card
+                // can never show a stale title on open.
+                commands += "artwork_save\nplaying\napp\n"
             }
             stdinHandle?.write(Data(commands.utf8))
             lastOutputAt = Date()
@@ -346,10 +350,13 @@ final class RemoteSession: ObservableObject {
         playingTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.state == .connected else { return }
+                self.playingTick += 1
                 var commands = "playing\napp\n"
-                if !self.nowPlaying.isActiveState {
-                    // Keep prodding for a snapshot while the TV claims idle —
-                    // it may just not have told us yet (tvOS 26 behavior).
+                // tvOS 26 doesn't reliably push state to established clients:
+                // prod for a fresh snapshot every tick while it claims idle,
+                // and every ~15s even while "Playing" — the content can change
+                // (new movie, app switch) without the TV ever telling us.
+                if !self.nowPlaying.isActiveState || self.playingTick.isMultiple(of: 5) {
                     commands = "artwork_save\n" + commands
                 }
                 self.stdinHandle?.write(Data(commands.utf8))
@@ -358,7 +365,13 @@ final class RemoteSession: ObservableObject {
     }
 
     private func parse(line: String) {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        // The cli prints its prompt without a newline, so a block's first
+        // line arrives as "pyatv>   Media type: …" — strip the prompt or
+        // prefix-based matching silently misses block starts.
+        while trimmed.hasPrefix("pyatv>") {
+            trimmed = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        }
 
         if trimmed.contains("PowerState.On") {
             if powerState != .on { powerState = .on }
@@ -402,8 +415,19 @@ final class RemoteSession: ObservableObject {
         }
     }
 
-    /// Field-by-field parse of `playing` output blocks. Returns true if the
-    /// line belonged to a now-playing block.
+    private struct PlayingBlock {
+        var state = ""
+        var title = ""
+        var subtitle = ""
+        var position = 0
+        var total = 0
+    }
+
+    /// Parse `playing` output as whole blocks: accumulate from "Media type:"
+    /// and commit atomically on "Shuffle:" (present in every block, media or
+    /// idle). Fields absent from a block CLEAR rather than leaking the
+    /// previous content's values — that leak is how a stale app name once
+    /// survived an app switch on the TV.
     private func parsePlaying(_ line: String) -> Bool {
         func value(_ key: String) -> String? {
             guard line.hasPrefix(key) else { return nil }
@@ -411,35 +435,27 @@ final class RemoteSession: ObservableObject {
         }
 
         if line == "Nothing playing" {
+            pendingBlock = nil
             clearNowPlaying()
             return true
         }
         if value("Media type:") != nil {
-            return true  // block header; fields follow
+            pendingBlock = PlayingBlock()
+            return true
         }
+        guard pendingBlock != nil else { return false }
+
         if let v = value("Device state:") {
-            nowPlaying.state = v
-            if v == "Idle" || v == "Stopped" {
-                clearNowPlaying(keepState: v)
-            }
+            pendingBlock?.state = v
             return true
         }
         if let v = value("Title:") {
-            if v != nowPlaying.title {
-                nowPlaying.title = v
-                nowPlaying.subtitle = ""
-                nowPlaying.position = 0
-                nowPlaying.total = 0
-            }
-            if v != lastArtworkTitle {
-                lastArtworkTitle = v
-                requestArtwork(for: v)
-            }
+            pendingBlock?.title = v
             return true
         }
         for key in ["Artist:", "Album:", "Series Name:"] {
             if let v = value(key) {
-                if nowPlaying.subtitle.isEmpty { nowPlaying.subtitle = v }
+                if pendingBlock?.subtitle.isEmpty == true { pendingBlock?.subtitle = v }
                 return true
             }
         }
@@ -449,12 +465,49 @@ final class RemoteSession: ObservableObject {
             if parts.count == 2,
                let pos = Int(parts[0]),
                let total = Int(parts[1].prefix(while: \.isNumber)) {
-                nowPlaying.position = pos
-                nowPlaying.total = total
+                pendingBlock?.position = pos
+                pendingBlock?.total = total
             }
             return true
         }
+        if value("Repeat:") != nil {
+            return true
+        }
+        if value("Shuffle:") != nil {
+            if let block = pendingBlock { commitPlayingBlock(block) }
+            pendingBlock = nil
+            return true
+        }
+        // Extra per-content lines (Genre, Identifier, Season, …) belong to
+        // the block but carry nothing we show.
+        for key in ["Genre:", "Identifier:", "iTunes Store Identifier:", "Season:", "Episode:", "Hash:"] {
+            if value(key) != nil { return true }
+        }
         return false
+    }
+
+    private func commitPlayingBlock(_ block: PlayingBlock) {
+        if block.state == "Idle" || block.state == "Stopped" {
+            clearNowPlaying(keepState: block.state)
+            return
+        }
+        if block.title != lastArtworkTitle {
+            if block.title.isEmpty {
+                artwork = nil
+                lastArtworkTitle = ""
+            } else {
+                lastArtworkTitle = block.title
+                requestArtwork(for: block.title)
+            }
+        }
+        let updated = NowPlaying(
+            state: block.state,
+            title: block.title,
+            subtitle: block.subtitle,
+            position: block.position,
+            total: block.total
+        )
+        if updated != nowPlaying { nowPlaying = updated }
     }
 
     private func clearNowPlaying(keepState: String = "") {
